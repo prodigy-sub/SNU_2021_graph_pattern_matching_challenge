@@ -7,6 +7,7 @@
 #define CANDIDATE_SET_H_
 
 #include "common.h"
+#include "graph.h"
 
 class CandidateSet {
  public:

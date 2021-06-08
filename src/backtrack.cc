@@ -8,36 +8,34 @@
 #include <queue>
 #include <algorithm>
 #include <unordered_set>
+#include <stdlib.h>
 
 Backtrack::Backtrack() {}
 Backtrack::~Backtrack() {}
 
-// visit는 cs(data)의 node들
-std::unordered_set<Vertex> visit;
-// extendable은 dag의 node들
-// https://www.geeksforgeeks.org/priority-queue-of-pairs-in-c-ordered-by-first/ 코드 참조
-typedef std::pair<size_t, Vertex> pi;
-// pi 의 첫번째 원소 : Candidate size, 두번째 원소 : vertex
-std::priority_queue<pi, std::vector<pi>, std::greater<pi> > extendable;
 
-//compare func for sorting neighbor while building dag
-void Backtrack::BuildDAG(const Graph &data, const Graph &query)
+std::unordered_set<Vertex> visit;      //visited data vertices during backtracking
+std::vector<std::vector<size_t>> extendable_vertices;        // list of extendable data vertices in each query node
+typedef std::pair<size_t, Vertex> pi;
+size_t count=0; //check number of matching result
+
+void Backtrack::BuildDAG(const Graph &data, const Graph &query, const CandidateSet &cs)
 {
     std::cout << "t " << query.GetNumVertices() << "\n";
 
-    size_t graph_size = data.GetNumVertices();
     size_t query_size = query.GetNumVertices();
     std::map<Label, std::vector<Vertex> > label_map;
 
     std::vector<std::vector<Vertex> > cs_list;
     cs_list.resize(query_size);
 
-    size_t query_label_num = query.GetNumLabels();
     labels.resize(query_size);
     degrees.resize(query_size);
+    cs_size.resize(query_size);
     //making label-query vertex map
     for (size_t j = 0; j < query_size; j++)
     {
+        cs_size[j] = cs.GetCandidateSize(j);
         degrees[j] = query.GetDegree(j);
         Label l = query.GetLabel(j);
         labels[j] = l;
@@ -54,46 +52,22 @@ void Backtrack::BuildDAG(const Graph &data, const Graph &query)
             label_map.find(l)->second.push_back(j);
         }
     }
-    //making initial cs
-    for (size_t i = 0; i < graph_size; i++)
-    {
 
-        Label l = data.GetLabel(i);
-
-        if (label_map.count(l) == 0)
-        {
-            continue;
-        }
-
-        else
-        {
-            for (Vertex v : label_map.find(l)->second)
-            {
-                if (query.GetDegree(v) > data.GetDegree(i))
-                {
-                    continue;
-                }
-                else
-                {
-                    cs_list[v].push_back(i);
-                }
-            }
-        }
-    }
-    //finding root
-    double min = (double)cs_list[0].size() / query.GetDegree(0);
+    //finding root (given cs version)
+    double min = (double)cs.GetCandidateSize(0)/query.GetDegree(0);
     root = 0;
     for (size_t j = 1; j < query_size; j++)
     {
-        double CDD = (double)cs_list[j].size() / query.GetDegree(j);
-        if (CDD < min)
-        {
+        double CDD = (double)cs.GetCandidateSize(j)/query.GetDegree(j);
+        if (CDD < min){
             min = CDD;
             root = j;
         }
+
     }
 
-    //BFS
+
+    //Build DAG using BFS
 
     dag_adj_list.resize(query_size);
     dag_parent_list.resize(query_size);
@@ -119,11 +93,11 @@ void Backtrack::BuildDAG(const Graph &data, const Graph &query)
         {
             neighbor[i - start_offset] = query.GetNeighbor(i);
         }
-        // sort neighbor by ascending order of label frequency in data first,
-        // and descending order of degree second
+
+        //  sort neighbor by descending order of candidate size and descending order of degree second
         std::sort(neighbor.begin(), neighbor.end(), [this](Vertex u, Vertex v) {
-            if (GetLabelFrequencyInData(GetLabel(u)) != GetLabelFrequencyInData(GetLabel(v)))
-                return GetLabelFrequencyInData(GetLabel(u)) < GetLabelFrequencyInData(GetLabel(v));
+            if (cs_size[u] != cs_size[v])
+                return cs_size[u]>cs_size[v];
             else if (GetDegree(u) != GetDegree(v))
                 return GetDegree(u) > GetDegree(v);
             else
@@ -142,7 +116,7 @@ void Backtrack::BuildDAG(const Graph &data, const Graph &query)
                 if (std::find(dag_adj_list[v].begin(), dag_adj_list[v].end(), u) == dag_adj_list[v].end())
                 {
                     dag_adj_list[u].push_back(v);
-                } //이미 리스트에 있는지 계속 확인하는거 살짝 효율 아쉬움
+                }
                 else
                 {
                     dag_parent_list[u].push_back(v);
@@ -171,106 +145,146 @@ void Backtrack::BuildDAG(const Graph &data, const Graph &query)
 void Backtrack::PrintAllMatches(const Graph &data, const Graph &query,
                                 const CandidateSet &cs)
 {
-    BuildDAG(data, query);
+    BuildDAG(data, query, cs);
     std::map<Vertex, Vertex> M;
-    // default : key 값 기준 오름 차순 정렬
-    // key가 dag에 있는 값
-    // 근데 key 가 중복되면 안되는데 상관 없나,,,? print하면서 비워내면 상관없을 듯
-    BackTrack(query, cs, M);
+    std::priority_queue<pi, std::vector<pi>, std::greater<pi> > extendable;
+    origin_data=data;
+    extendable_vertices.resize(query.GetNumVertices());
+    BackTrack(query, cs, M, extendable);
 }
 
-void Backtrack::BackTrack(const Graph &query, const CandidateSet &cs, std::map<Vertex, Vertex> &M)
+//recursive function to find subgraph
+void Backtrack::BackTrack(const Graph &query, const CandidateSet &cs, std::map<Vertex, Vertex> &M, std::priority_queue<pi, std::vector<pi>, std::greater<pi> > &extendable)
 {
-    //BackTracking 맡긴다 동섭
+    // stop one cycle if one of the query vertex's cs is all used.
+    if(!isAllUsed(query,cs,visit,M)) {
 
-    size_t query_size = query.GetNumVertices();
 
-    // https://www.delftstack.com/ko/howto/cpp/how-to-iterate-over-map-in-cpp/ 반복문에 이 코드 참조
-    // auto 안쓰고 하는게 더 효율적이냐 호준?
-    if (M.size() == query_size)
-    {
-        // 결과 출력
-        std::cout << "a";
-        auto iter = M.begin();
-        while (iter != M.end())
-        {
-            std::cout << " " << iter->second;
-            iter++;
-        }
-        std::cout << "\n";
-    }
+        size_t query_size = query.GetNumVertices();
 
-    // 크기 0이면 root부터 시작
-    // 일단은 그냥 어거지로 root 변수 넣는데 나중에 root를 전달해줄 방법을 생각해야할 듯? dag 클래스를 파서 root 멤버 변수를 주던가?
-    else if (M.size() == 0)
-    {
-        size_t csize = cs.GetCandidateSize(root);
-        for (size_t i = 0; i < csize; i++)
-        {
-            M.insert(std::pair<Vertex, Vertex>(root, cs.GetCandidate(root, i)));
-            // 자식노드가 extendable이면 extendable에 넣어준다.
-            for (size_t j = child_start_offset[root]; j < parent_start_offset[root + 1]; j++)
-            {
-                if (isExtendable(j, M))
-                {
-                    extendable.push(std::make_pair(cs.GetCandidateSize(j), j));
-                }
+        if (M.size() == query_size) {
+            // stdout the matching result
+            count++;
+            std::cout<<"a";
+            auto iter = M.begin();
+            while (iter != M.end()) {
+                std::cout<<" "<<iter->second;
+                iter++;
+            }
+            std::cout<<"\n";
+            if(count==100000){
+                exit(0);
             }
 
-            visit.insert(cs.GetCandidate(root, i));
-            BackTrack(query, cs, M);
-            // 이렇게 해도 같은 노드 지워주나,,,? 정신 맑을 때 고민하자
-            visit.erase(cs.GetCandidate(root, i));
         }
-    }
 
-    else
-    {
-        // extendable 따지려면 dag의 parent를 알아야한다. how..
-        // 이거 알 수 있게 dag다시 짜는게 더 좋을까?
-        // 찾아보니까 그렇게 하는게 좋다는 글이 있네
-        // 일단은 좀 비효율적이어도 돌아가게 한번 짜본다.
-        // 리커시브하게 하다가 i랑 j값 꼬일거 같다 왠지
+            // begin at root
+        else if (M.size() == 0) {
+            size_t csize = cs.GetCandidateSize(root);
+            for (size_t i = 0; i < csize; i++) {
+                std::priority_queue<pi, std::vector<pi>, std::greater<pi> > extendable_prime;
+                M.insert(std::pair<Vertex, Vertex>(root, cs.GetCandidate(root, i)));
 
-        Vertex u; //여기에 로직에 맞게 u 넣어준다.
-        u = extendable.top().second;
-        extendable.pop();
-
-        size_t csize_u = cs.GetCandidateSize(u);
-        for (size_t j = 0; j < csize_u; j++)
-        {
-            Vertex v = cs.GetCandidate(u, j);
-            // 여기서 꼬일 것 같음
-            if (visit.find(v) == visit.end())
-            // visit 에 없다는 것
-
-            {
-                M.insert(std::pair<Vertex, Vertex>(u, v));
-                // 자기자신은 extendable에서 빼준다.
-                for (size_t j = child_start_offset[u]; j < parent_start_offset[u + 1]; j++)
-                {
-                    if (isExtendable(j, M))
-                    {
-                        extendable.push(std::make_pair(cs.GetCandidateSize(j), j));
+                // push child node if it is all connected with its parents
+                for (size_t j = child_start_offset[root]; j < parent_start_offset[root + 1]; j++) {
+                    if (isExtendable(dag_adj_array[j], M)) {
+                        extendable_prime.push(
+                                std::make_pair(ExtendableVertices(dag_adj_array[j], M, cs), dag_adj_array[j]));
                     }
                 }
-                visit.insert(v);
-                BackTrack(query, cs, M);
-                visit.erase(v);
+
+                visit.insert(cs.GetCandidate(root, i));
+                BackTrack(query, cs, M, extendable_prime);
+                M.erase(root);
+                visit.erase(cs.GetCandidate(root, i));
+
+
+            }
+        } else {
+
+            Vertex u;
+            u = extendable.top().second; // query vertex to be searched
+            extendable.pop();
+            //only consider
+            for (size_t j = 0; j < extendable_vertices[u].size(); j++)
+            {
+                Vertex v = extendable_vertices[u][j];
+
+                // only consider unvisited vertex
+                if (visit.find(v) == visit.end())
+                {
+
+                        M.insert(std::pair<Vertex, Vertex>(u, v));
+
+
+                        std::priority_queue<pi, std::vector<pi>, std::greater<pi> > extendable_prime = extendable;
+
+                        //put extendable child to priority queue
+                        for (size_t j = child_start_offset[u]; j < parent_start_offset[u + 1]; j++) {
+                            if (isExtendable(dag_adj_array[j], M)) {
+                                extendable_prime.push(
+                                        std::make_pair(ExtendableVertices(dag_adj_array[j], M, cs), dag_adj_array[j]));
+                            }
+                        }
+                        visit.insert(v);
+                        BackTrack(query, cs, M, extendable_prime);
+                        M.erase(u);
+
+                        visit.erase(v);
+                    }
+                }
             }
         }
     }
-}
 
+// return true if all u's parents are included in M
 bool Backtrack::isExtendable(Vertex u, const std::map<Vertex, Vertex> &M)
 {
     for (size_t i = parent_start_offset[u]; i < child_start_offset[u]; i++)
     {
-        // parent가 하나라도 Mapping 에 없으면
-        if (M.find(i) == M.end())
+        if (M.find(dag_adj_array[i]) == M.end())
         {
             return false;
         }
     }
     return true;
+}
+
+// return the number of extendable vertices in child cs, and store that vertices.
+size_t Backtrack::ExtendableVertices(Vertex u, const std::map<Vertex,Vertex> &M, const CandidateSet &cs){
+
+    size_t extendable_count=0;
+    std::vector<size_t> possible_vertices;
+    for(size_t i = 0; i < cs.GetCandidateSize(u); i++){
+        size_t counter=0;
+        for(size_t j = parent_start_offset[u]; j < child_start_offset[u]; j++){
+            if(origin_data.IsNeighbor(M.at(dag_adj_array[j]),cs.GetCandidate(u,i))){
+                counter++;
+            }
+        }
+        if(counter == child_start_offset[u] - parent_start_offset[u]){
+            extendable_count++;
+            possible_vertices.push_back(cs.GetCandidate(u,i));
+        }
+    }
+    extendable_vertices[u]=possible_vertices;
+    return extendable_count;
+}
+
+// return true if cs of unvisited query vertex is all used
+bool Backtrack::isAllUsed(const Graph &query, const CandidateSet &cs, std::unordered_set<Vertex> &visited,std::map<Vertex, Vertex> &M) {
+    for(size_t i = 0; i < query.GetNumVertices(); i++){
+        if(M.find(i)==M.end()) {
+            size_t remaining = cs.GetCandidateSize(i);
+            for (size_t j = 0; j < cs.GetCandidateSize(i); j++) {
+                if (visited.find(cs.GetCandidate(i, j)) != visited.end()) {
+                    remaining--;
+                }
+            }
+            if (remaining == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
 }

@@ -7,7 +7,6 @@
 
 CandidateSet::CandidateSet(const std::string& filename) {
   std::ifstream fin(filename);
-
   if (!fin.is_open()) {
     std::cout << "Candidate set file " << filename << " not found!\n";
     exit(EXIT_FAILURE);
@@ -38,6 +37,7 @@ CandidateSet::CandidateSet(const std::string& filename) {
   }
 
   fin.close();
+
 }
 
 CandidateSet::~CandidateSet() {}
